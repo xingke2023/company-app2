@@ -4,221 +4,181 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Architecture
 
-This is a full-stack application with **separate backend and frontend** in a monorepo structure:
+Monorepo with two independent applications:
 
-- **Backend**: Laravel 13 API (PHP 8.4) in `backend/` directory
-- **Frontend**: Next.js 16 (React 19.2, TypeScript) in `frontend/` directory
+- **`backend/`** — Laravel 13 (PHP 8.4), dual-purpose: REST API + Filament admin panel
+- **`frontend/`** — Next.js 16 (React 19, TypeScript), App Router, Tailwind CSS 4
 
-### Authentication Flow
-JWT (`php-open-source-saver/jwt-auth`) provides token-based authentication. The flow is:
-1. Frontend sends credentials to `/api/auth/login` or `/api/auth/register`
-2. Backend returns JWT `access_token` + user object + `expires_in`
-3. Frontend stores token in localStorage
-4. Frontend sends token via `Authorization: Bearer {token}` header for protected routes
-5. Token refresh available via `POST /api/auth/refresh`
+### Two Auth Systems (important distinction)
 
-**Key Implementation**:
-- `AuthProvider` (frontend/lib/auth-context.tsx) manages global auth state
-- `useAuth` hook provides auth methods to components
-- `ApiClient` (frontend/lib/api/client.ts) auto-injects Bearer token
-- Backend routes protected with `auth:api` middleware
-- `AuthController` uses `auth('api')` guard for all operations
+The backend runs **two separate authentication systems** that must not be confused:
 
-### CORS & Cross-Origin Setup
-Backend is configured to accept requests from frontend via:
-- `backend/.env`: `FRONTEND_URL` specifies allowed origin
-- Current ports: Backend 8068, Frontend 3111 (both bound to 0.0.0.0 for remote access)
+| System | Guard | Route prefix | Used by |
+|--------|-------|--------------|---------|
+| JWT (`php-open-source-saver/jwt-auth`) | `auth:api` | `/api/` | Next.js frontend REST calls |
+| Session (Filament built-in) | `web` | `/admin` | Filament admin panel only |
 
-### API Architecture
-- Routes defined in `backend/routes/api.php`
-- All routes prefixed with `/api`
-- Controllers in `backend/app/Http/Controllers/Api/`
-- PostController uses route model binding and authorization checks (owner-only operations)
+JWT flow: `POST /api/auth/login` → backend returns `{ access_token, token_type, expires_in, user }` → frontend stores in `localStorage` → sent as `Authorization: Bearer {token}` header.
+
+`auth:api` guard is in `config/auth.php`. Filament session auth is wired in `app/Providers/Filament/AdminPanelProvider.php`. **Always use `auth('api')`** in API controllers — the default `auth()` uses the `web` guard.
+
+### Domain Model — ERP + CRM
+
+The backend implements two integrated systems sharing the `Customer` model:
+
+**进销存 (Inventory/ERP)**
+- `ProductCategory` → `Product` (has category, supplier, stock tracking)
+- `Supplier` → `PurchaseOrder` → `PurchaseOrderItem` → `Product`
+- `Customer` → `SalesOrder` → `SalesOrderItem` → `Product`
+- `InventoryLog` — polymorphic stock movement log (reference_type/reference_id)
+
+**CRM**
+- `Customer` (shared with ERP) — has `Contact`s, `SalesOrder`s, `Opportunity`s, `Activity`s
+- `Lead` → `Opportunity` (lead_id FK) → can be converted to a Customer
+- `Activity` — polymorphic tracking (customer_id / lead_id / opportunity_id, all nullable)
+
+Key integration: `SalesOrder.customer_id` → `Customer`; `Opportunity` can link to both `Customer` and `Lead`.
+
+### Filament Admin Resources
+
+Located at `/admin`. Resources are **modular** — each resource lives in its own subdirectory under `app/Filament/Resources/`, with separate `Schemas/` and `Tables/` classes:
+
+```
+app/Filament/Resources/
+  Products/
+    ProductResource.php       ← navigation group, relations, pages
+    Schemas/ProductForm.php   ← form fields (configure() static method)
+    Tables/ProductsTable.php  ← table columns, filters, actions
+    Pages/...
+  PurchaseOrders/
+    RelationManagers/ItemsRelationManager.php
+  ...
+```
+
+Two navigation groups: **进销存** (ProductCategory, Supplier, Product, PurchaseOrder, SalesOrder) and **CRM** (Customer, Lead, Opportunity, Activity). Legacy `UserResource` and `PostResource` are flat files (old style, no subdirectory).
+
+**Filament 5.x property type caveat**: `$navigationGroup` must be declared as `string | \UnitEnum | null` (not `?string`) to match the parent trait. `$navigationIcon` uses `string | BackedEnum | null`. Using `?string` for `$navigationGroup` causes a fatal PHP error.
+
+**RelationManagers** registered on PurchaseOrder (items), SalesOrder (items), Customer (contacts).
+
+### API Routes (`routes/api.php`)
+
+All routes under `auth:api` middleware except the auth endpoints:
+
+```
+POST   /api/auth/login|register
+GET    /api/auth/me|refresh|logout   (auth:api)
+
+GET    /api/products[/{product}]      (read-only)
+GET    /api/sales-orders[/{id}]       (read-only)
+CRUD   /api/customers
+CRUD   /api/leads
+CRUD   /api/opportunities
+```
+
+`PostController` exists (`app/Http/Controllers/Api/PostController.php`) but its routes are **not yet registered** in `api.php`.
+
+### Frontend API Layer (`frontend/lib/api/`)
+
+- `client.ts` — `ApiClient` class; token passed explicitly to each call (no interceptor)
+- `types.ts` — `User`, `Post`, `AuthResponse`, `PaginatedResponse<T>`, etc. (ERP/CRM types not yet added)
+- `auth.ts` / `posts.ts` — service functions wrapping `ApiClient`
+- `index.ts` — re-exports everything
+
+`auth-context.tsx` at `frontend/lib/auth-context.tsx` — `AuthProvider` + `useAuth` hook; stores token/user in `localStorage` (`auth_token` / `auth_user`); wraps the app in `app/layout.tsx`.
 
 ## Development Commands
 
-### Backend (Laravel)
+### Backend
+
 ```bash
 cd backend
 
-# Start server (remote access)
-php artisan serve --host=0.0.0.0 --port=8068
+# Start everything (server + queue + logs + vite) — preferred
+composer run dev
+
+# Or just the API server
+php artisan serve --host=127.0.0.1 --port=8301
 
 # Database
-php artisan migrate              # Run migrations
-php artisan migrate:fresh        # Reset database
-php artisan db:seed              # Seed data (demo user: demo@example.com / password)
+php artisan migrate
+php artisan migrate:fresh --seed   # reset + seed (demo@example.com / password)
 
-# Testing
-php artisan test                 # Run all tests (Pest)
-php artisan test --filter=testName  # Run specific test
+# Testing (Pest)
+composer run test
+php artisan test tests/Feature/ExampleTest.php
+php artisan test --filter=testName
 
-# Cache
-php artisan cache:clear
-php artisan config:cache         # Cache config for production
-php artisan route:cache          # Cache routes for production
+# Code style — run after any PHP changes
+vendor/bin/pint --dirty
 
 # Utilities
-php artisan route:list           # List all routes
-php artisan make:controller Api/ExampleController  # New controller
-php artisan make:model Example -mf  # Model + migration + factory
+php artisan route:list
+php artisan tinker
 ```
 
-### Frontend (Next.js)
+### Frontend
+
 ```bash
 cd frontend
 
-# Start dev server (configured for port 3111, remote access)
-npm run dev
-
-# Build
+npm run dev      # port 3112, bound to 0.0.0.0
 npm run build
-npm start                        # Production server
-
-# Linting
 npm run lint
 
 # Add shadcn/ui components
 npx shadcn@latest add [component-name]
 ```
 
-## File Structure Patterns
+## Key Configuration
 
-### Backend
-- **Controllers**: `app/Http/Controllers/Api/` - API endpoints
-- **Models**: `app/Models/` - Eloquent models with relationships
-- **Routes**: `routes/api.php` - API route definitions
-- **Migrations**: `database/migrations/` - Database schema
-- **Factories**: `database/factories/` - Test data generation
-- **Config**: `bootstrap/app.php` - Middleware, routing, exceptions
+### Deployment (this server)
 
-### Frontend
-- **Pages**: `app/*/page.tsx` - Next.js App Router pages
-- **API Layer**: `lib/api/` - HTTP client, type definitions, service methods
-- **Auth**: `lib/auth-context.tsx` - Global authentication state
-- **UI Components**: `components/ui/` - shadcn/ui components
-- **Layout**: `app/layout.tsx` - Root layout with AuthProvider wrapper
+- **Domain**: `app1.xingke888.com` (HTTPS, Cloudflare + Let's Encrypt)
+- **Backend port**: 8301 — **Frontend port**: 3112
+- **nginx config**: `/etc/nginx/sites-available/app1.xingke888.com.conf`
+- **Filament admin**: `https://app1.xingke888.com/admin` — credentials: `demo@example.com` / `password`
 
-## Key Configuration Files
+The nginx config proxies by path: `/api/`, `/admin`, `/livewire-*`, `/filament`, `/storage`, `/up`, `/_boost`, `/fonts`, `/css`, `/js` → backend (8301). Everything else → frontend (3112).
 
-### Backend Environment (backend/.env)
-```
-APP_URL=http://0.0.0.0:8068
-FRONTEND_URL=http://0.0.0.0:3111
-JWT_SECRET=<generated via php artisan jwt:secret>
-JWT_ALGO=HS256
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=clawdb
-DB_USERNAME=postgres
-```
+### Environment files
 
-### Frontend Environment (frontend/.env.local)
-```
-NEXT_PUBLIC_API_URL=http://0.0.0.0:8068/api
-```
+- `backend/.env` — `APP_URL`, `FRONTEND_URL` (CORS origin), `JWT_SECRET`, `JWT_ALGO=HS256`, PostgreSQL credentials
+- `frontend/.env.local` — `NEXT_PUBLIC_API_URL=https://app1.xingke888.com/api`
 
-## Common Development Tasks
+### Database
 
-### Adding a New API Endpoint
-1. Create controller method in `backend/app/Http/Controllers/Api/`
-2. Add route in `backend/routes/api.php`
-3. Add TypeScript types in `frontend/lib/api/types.ts`
-4. Add API method in `frontend/lib/api/` service file
-5. Use in components via API client
+PostgreSQL, database `clawdb1`, user `hengtai_app`. No SQLite fallback.
 
-### Adding a New Model with CRUD
+## Laravel Patterns in This Codebase
+
+- **No `app/Http/Kernel.php`** — middleware registered in `bootstrap/app.php`; `trustProxies(at: '*')` is set there (required for nginx reverse proxy)
+- **Model casts** use `casts(): array` method, not `$casts` property
+- **Form Requests** in `app/Http/Requests/Api/` for all API validation (no inline validation in controllers)
+- **No Policy classes** — authorization in controllers checks ownership directly (e.g. `$post->user_id !== $request->user()->id`)
+
+## Adding a New Filament Resource
+
 ```bash
-cd backend
-php artisan make:model Example -mfc  # Model + migration + factory + controller
-# Edit migration, model relationships, factory
-php artisan migrate
-# Add routes to routes/api.php
-# Create corresponding TypeScript types and API methods in frontend
+php artisan make:filament-resource ModelName --generate --no-interaction
+# Creates: ResourceName/, Schemas/Form.php, Tables/Table.php, Pages/, RelationManagers/
 ```
 
-### Adding a New Page
-1. Create `frontend/app/[pagename]/page.tsx`
-2. Use `'use client'` directive if using hooks or interactivity
-3. Import `useAuth` from `@/lib/auth-context` for auth state
-4. Use components from `@/components/ui/` for UI
+Then in the Resource file: set `$navigationGroup` as `string | \UnitEnum | null`, `$navigationLabel`, `$modelLabel`, `$navigationSort`.
 
-### Working with Database
-```bash
-# Reset and seed (development only)
-cd backend
-php artisan migrate:fresh --seed
+## Adding a New API Resource
 
-# Interactive testing
-php artisan tinker
-# >>> User::factory(5)->create();
-# >>> Post::factory(10)->create();
-```
-
-## Testing Approach
-
-### Backend (Pest)
-- Tests in `backend/tests/Feature/` and `backend/tests/Unit/`
-- Use factories for model creation
-- Test structure: `it('description', function() { ... })`
-- Run specific file: `php artisan test tests/Feature/ExampleTest.php`
-
-### API Testing with cURL
-```bash
-# Login
-curl -X POST http://0.0.0.0:8068/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"demo@example.com","password":"password"}'
-
-# Create post (replace TOKEN)
-curl -X POST http://0.0.0.0:8068/api/posts \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer TOKEN" \
-  -d '{"title":"Test","content":"Content","published":true}'
-```
-
-## Important Laravel 13 Patterns
-
-### Middleware Registration
-Use `bootstrap/app.php` instead of `app/Http/Kernel.php` (removed in Laravel 11+):
-```php
-->withMiddleware(function (Middleware $middleware): void {
-    // JWT auth:api guard is configured in config/auth.php
-    // No additional middleware prepend needed for JWT
-})
-```
-
-### Model Casts
-Prefer `casts()` method over `$casts` property:
-```php
-protected function casts(): array {
-    return ['published' => 'boolean'];
-}
-```
-
-### Authorization
-PostController implements owner-only operations by checking `$post->user_id !== $request->user()->id`
+1. `php artisan make:model Example -mfc --no-interaction` in `backend/`
+2. Edit migration, add `$fillable`, define relationships; `php artisan migrate`
+3. Create Form Request in `app/Http/Requests/Api/`
+4. Add controller in `app/Http/Controllers/Api/`
+5. Register in `routes/api.php`
+6. Add TypeScript types to `frontend/lib/api/types.ts`
+7. Add service functions to `frontend/lib/api/example.ts`, export from `index.ts`
 
 ## Technology Versions
 
-- Laravel 13.8.0, PHP 8.4.1, JWT-Auth 2.9, Pest 4.1.6
-- Next.js 16.2.6, React 19.2.6, TypeScript 5.x, Tailwind CSS 4.x
-- Database: PostgreSQL (development & production)
-
-## Troubleshooting
-
-### CORS Issues
-- Verify both servers are running on correct ports
-- Check `FRONTEND_URL` in backend/.env includes frontend URL
-- Clear browser cache and localStorage
-
-### Authentication Issues
-- Clear localStorage: `localStorage.clear()` in browser console
-- Verify `NEXT_PUBLIC_API_URL` in frontend/.env.local matches backend
-- Check token is being sent: inspect Network tab in DevTools
-
-### Port Conflicts
-Current setup uses non-standard ports (8068, 3111) to avoid conflicts. Modify:
-- Backend: `backend/.env` APP_URL and serve command
-- Frontend: `frontend/package.json` dev script and `.env.local`
+- Laravel 13, PHP 8.4, Filament 5.6, JWT-Auth 2.9, Pest 4, Pint 1
+- Next.js 16.2, React 19.2, TypeScript 5, Tailwind CSS 4
+- react-hook-form + zod for frontend forms
+- PostgreSQL (dev & prod)
