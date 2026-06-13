@@ -54,3 +54,67 @@ export interface PostFormData {
   content: string;
   published?: boolean;
 }
+
+export interface Product {
+  id: number;
+  name: string;
+  sku: string;
+  unit: string;
+  cost_price: string;
+  sell_price: string;
+  stock_quantity: number;
+  min_stock: number | null;
+  status: string;
+  category?: { id: number; name: string };
+  supplier?: { id: number; name: string };
+}
+
+export interface Customer {
+  id: number;
+  name: string;
+  company: string | null;
+  phone: string | null;
+  email: string | null;
+  status: string;
+  type: string | null;
+  sales_orders_count?: number;
+}
+
+export interface Lead {
+  id: number;
+  name: string;
+  company: string | null;
+  phone: string | null;
+  email: string | null;
+  source: string | null;
+  status: string;
+}
+
+export interface Opportunity {
+  id: number;
+  title: string;
+  amount: string;
+  stage: string;
+  probability: number;
+  expected_close_date: string | null;
+  customer?: { id: number; name: string };
+}
+
+export interface SalesOrder {
+  id: number;
+  order_no: string;
+  status: string;
+  total_amount: string;
+  ordered_at: string | null;
+  customer?: { id: number; name: string };
+}
+
+export interface PurchaseOrder {
+  id: number;
+  order_no: string;
+  status: string;
+  total_amount: string;
+  ordered_at: string | null;
+  supplier?: { id: number; name: string };
+  items_count?: number;
+}

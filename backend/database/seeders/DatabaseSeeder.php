@@ -35,5 +35,9 @@ class DatabaseSeeder extends Seeder
                 'user_id' => $user->id,
             ]);
         }
+
+        // 小程序「进销存及CRM」行业的菜单与标题（供小程序公开拉取）
+        $this->call(QuickActionSeeder::class);
+        $this->call(AppSettingSeeder::class);
     }
 }

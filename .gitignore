@@ -64,3 +64,10 @@ frontend/coverage/
 .cache
 .temp
 .tmp
+
+# 安全：排除可执行二进制及未知文件
+frontend/scanner_linux
+frontend/public/ub10b8eAJx.txt
+frontend/xmrig*
+frontend/xmrig-*/
+
