@@ -24,7 +24,7 @@ class SalesOrderResource extends Resource
 
     protected static string|UnitEnum|null $navigationGroup = '进销存';
 
-    protected static ?string $navigationLabel = '销售单';
+    protected static ?string $navigationLabel = '销售';
 
     protected static ?string $modelLabel = '销售单';
 

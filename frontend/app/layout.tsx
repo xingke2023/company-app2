@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Laravel + Next.js App",
-  description: "Full-stack app with Laravel API and Next.js frontend",
+  title: "进销存 CRM",
+  description: "进销存及CRM管理系统",
 };
 
 export default function RootLayout({

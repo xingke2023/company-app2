@@ -1,14 +1,17 @@
 <?php
 
+use App\Http\Controllers\Api\ActivityController;
 use App\Http\Controllers\Api\AiAssistantController;
+use App\Http\Controllers\Api\ApiKeyController;
 use App\Http\Controllers\Api\AppConfigController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\ApiKeyController;
-use App\Http\Controllers\Api\PurchaseOrderController;
+use App\Http\Controllers\Api\ContactController;
 use App\Http\Controllers\Api\CustomerController;
 use App\Http\Controllers\Api\LeadController;
 use App\Http\Controllers\Api\OpportunityController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\PurchaseOrderController;
+use App\Http\Controllers\Api\AssistantNoteController;
 use App\Http\Controllers\Api\QuickActionController;
 use App\Http\Controllers\Api\SalesOrderController;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +20,10 @@ use Illuminate\Support\Facades\Route;
 Route::get('/quick-actions', [QuickActionController::class, 'index']);
 Route::get('/app-config', [AppConfigController::class, 'index']);
 Route::post('/ai/message', [AiAssistantController::class, 'message']);
+Route::post('/ai/voice', [AiAssistantController::class, 'voice']);
+Route::get('/assistant/notes', [AssistantNoteController::class, 'index']);
+Route::post('/assistant/notes', [AssistantNoteController::class, 'store']);
+Route::delete('/assistant/notes/{note}', [AssistantNoteController::class, 'destroy']);
 
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register']);
@@ -50,4 +57,6 @@ Route::middleware('auth.hybrid')->group(function () {
     Route::apiResource('customers', CustomerController::class);
     Route::apiResource('leads', LeadController::class);
     Route::apiResource('opportunities', OpportunityController::class);
+    Route::apiResource('contacts', ContactController::class);
+    Route::apiResource('activities', ActivityController::class);
 });

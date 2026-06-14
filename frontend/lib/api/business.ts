@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { PaginatedResponse, Product, Customer, Lead, Opportunity, SalesOrder, PurchaseOrder } from './types';
+import type { PaginatedResponse, Product, Customer, CustomerDetail, Activity, Lead, Opportunity, SalesOrder, PurchaseOrder } from './types';
 
 export const productsApi = {
   list: (token: string, search?: string) =>
@@ -7,8 +7,20 @@ export const productsApi = {
 };
 
 export const customersApi = {
-  list: (token: string, search?: string) =>
-    apiClient.get<PaginatedResponse<Customer>>(`/customers${search ? `?search=${encodeURIComponent(search)}` : ''}`, token),
+  list: (token: string, search?: string, status?: string) => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    return apiClient.get<PaginatedResponse<Customer>>(`/customers${qs ? `?${qs}` : ''}`, token);
+  },
+  get: (token: string, id: number) =>
+    apiClient.get<CustomerDetail>(`/customers/${id}`, token),
+};
+
+export const activitiesApi = {
+  listByCustomer: (token: string, customerId: number) =>
+    apiClient.get<PaginatedResponse<Activity>>(`/activities?customer_id=${customerId}&per_page=50`, token),
 };
 
 export const leadsApi = {

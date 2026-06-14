@@ -22,7 +22,7 @@ class ProductResource extends Resource
 
     protected static string|\UnitEnum|null $navigationGroup = '进销存';
 
-    protected static ?string $navigationLabel = '商品管理';
+    protected static ?string $navigationLabel = '库存';
 
     protected static ?string $modelLabel = '商品';
 

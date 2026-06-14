@@ -60,11 +60,6 @@ export function BusinessList({ title, fetchData, transform, searchPlaceholder }:
 
   return (
     <div className="min-h-screen bg-gray-50 pb-6">
-      {/* 顶栏 */}
-      <div className="sticky top-0 z-10 border-b bg-white px-4 py-3 shadow-sm">
-        <h1 className="text-base font-semibold text-gray-800">{title}</h1>
-      </div>
-
       {/* 搜索栏 */}
       <div className="bg-white px-4 py-3 border-b">
         <form

@@ -26,6 +26,17 @@ class StoreCustomerRequest extends FormRequest
             'status' => ['nullable', 'in:active,inactive,potential'],
             'assigned_to' => ['nullable', 'exists:users,id'],
             'notes' => ['nullable', 'string'],
+            // 客户画像
+            'gender' => ['nullable', 'in:male,female,other'],
+            'age_group' => ['nullable', 'in:18-25,26-35,36-45,46-55,55+'],
+            'birthday' => ['nullable', 'date'],
+            'city' => ['nullable', 'string', 'max:100'],
+            'industry' => ['nullable', 'string', 'max:100'],
+            'income_level' => ['nullable', 'in:low,medium,high,ultra-high'],
+            'hobbies' => ['nullable', 'array'],
+            'hobbies.*' => ['string', 'max:50'],
+            'tags' => ['nullable', 'array'],
+            'tags.*' => ['string', 'max:50'],
         ];
     }
 }

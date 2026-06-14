@@ -7,6 +7,14 @@ export interface User {
   updated_at: string;
 }
 
+export interface AssistantNote {
+  id: number;
+  type: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Post {
   id: number;
   user_id: number;
@@ -107,6 +115,26 @@ export interface SalesOrder {
   total_amount: string;
   ordered_at: string | null;
   customer?: { id: number; name: string };
+}
+
+export interface Activity {
+  id: number;
+  type: string;
+  title: string | null;
+  description: string | null;
+  scheduled_at: string | null;
+  completed_at: string | null;
+  customer_id: number | null;
+  lead_id: number | null;
+  opportunity_id: number | null;
+  created_at: string;
+}
+
+export interface CustomerDetail extends Customer {
+  address: string | null;
+  notes: string | null;
+  contacts: { id: number; name: string; phone: string | null; position: string | null }[];
+  activities: Activity[];
 }
 
 export interface PurchaseOrder {

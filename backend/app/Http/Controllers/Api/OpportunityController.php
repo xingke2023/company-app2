@@ -5,33 +5,22 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\StoreOpportunityRequest;
 use App\Models\Opportunity;
+use App\Services\OpportunityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class OpportunityController extends Controller
 {
+    public function __construct(private OpportunityService $service) {}
+
     public function index(Request $request): JsonResponse
     {
-        $query = Opportunity::with(['customer:id,name', 'assignedUser:id,name']);
-
-        if ($request->has('stage')) {
-            $query->where('stage', $request->stage);
-        }
-
-        if ($request->has('customer_id')) {
-            $query->where('customer_id', $request->customer_id);
-        }
-
-        $opportunities = $query->latest()->paginate($request->get('per_page', 15));
-
-        return response()->json($opportunities);
+        return response()->json($this->service->list($request->all()));
     }
 
     public function store(StoreOpportunityRequest $request): JsonResponse
     {
-        $opportunity = Opportunity::create($request->validated());
-
-        return response()->json($opportunity, 201);
+        return response()->json($this->service->create($request->validated()), 201);
     }
 
     public function show(Opportunity $opportunity): JsonResponse
@@ -39,23 +28,32 @@ class OpportunityController extends Controller
         $opportunity->load([
             'customer:id,name,phone',
             'lead:id,name',
-            'assignedUser:id,name',
             'activities' => fn ($q) => $q->latest()->limit(10),
         ]);
 
         return response()->json($opportunity);
     }
 
-    public function update(StoreOpportunityRequest $request, Opportunity $opportunity): JsonResponse
+    public function update(Request $request, Opportunity $opportunity): JsonResponse
     {
-        $opportunity->update($request->validated());
+        $data = $request->validate([
+            'title' => ['sometimes', 'required', 'string', 'max:255'],
+            'customer_id' => ['nullable', 'exists:customers,id'],
+            'lead_id' => ['nullable', 'exists:leads,id'],
+            'amount' => ['nullable', 'numeric', 'min:0'],
+            'stage' => ['nullable', 'in:prospect,proposal,negotiation,won,lost'],
+            'probability' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'expected_close_date' => ['nullable', 'date'],
+            'assigned_to' => ['nullable', 'exists:users,id'],
+            'notes' => ['nullable', 'string'],
+        ]);
 
-        return response()->json($opportunity);
+        return response()->json($this->service->update($opportunity, $data));
     }
 
     public function destroy(Opportunity $opportunity): JsonResponse
     {
-        $opportunity->delete();
+        $this->service->delete($opportunity);
 
         return response()->json(null, 204);
     }

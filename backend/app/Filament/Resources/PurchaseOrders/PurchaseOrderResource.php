@@ -24,7 +24,7 @@ class PurchaseOrderResource extends Resource
 
     protected static string|UnitEnum|null $navigationGroup = '进销存';
 
-    protected static ?string $navigationLabel = '采购单';
+    protected static ?string $navigationLabel = '采购';
 
     protected static ?string $modelLabel = '采购单';
 

@@ -16,7 +16,18 @@ class Customer extends Model
     protected $fillable = [
         'name', 'company', 'phone', 'email', 'address',
         'type', 'source', 'status', 'assigned_to', 'notes',
+        'gender', 'age_group', 'birthday', 'city', 'industry',
+        'income_level', 'hobbies', 'tags',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'birthday' => 'date',
+            'hobbies' => 'array',
+            'tags' => 'array',
+        ];
+    }
 
     public function assignedUser(): BelongsTo
     {

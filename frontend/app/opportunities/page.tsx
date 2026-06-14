@@ -7,7 +7,7 @@ import type { Opportunity } from '@/lib/api';
 export default function OpportunitiesPage() {
   return (
     <BusinessList
-      title="销售商机"
+      title="商机"
       searchPlaceholder="搜索商机标题…"
       fetchData={(token, search) => opportunitiesApi.list(token, search)}
       transform={(item) => {

@@ -40,6 +40,18 @@ class CustomersTable
                         'potential' => '潜在',
                         default => $state,
                     }),
+                TextColumn::make('city')->label('城市')->toggleable(),
+                TextColumn::make('industry')->label('行业')->toggleable(),
+                TextColumn::make('income_level')->label('收入')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state) => match ($state) {
+                        'low' => '低',
+                        'medium' => '中',
+                        'high' => '高',
+                        'ultra-high' => '超高净值',
+                        default => $state ?? '—',
+                    })
+                    ->toggleable(),
                 TextColumn::make('assignedUser.name')->label('负责人'),
                 TextColumn::make('created_at')->label('创建时间')->dateTime('Y-m-d')->sortable()->toggleable(isToggledHiddenByDefault: true),
             ])
@@ -52,6 +64,24 @@ class CustomersTable
                 SelectFilter::make('type')->label('类型')->options([
                     'individual' => '个人',
                     'company' => '企业',
+                ]),
+                SelectFilter::make('gender')->label('性别')->options([
+                    'male' => '男',
+                    'female' => '女',
+                    'other' => '其他',
+                ]),
+                SelectFilter::make('age_group')->label('年龄段')->options([
+                    '18-25' => '18-25',
+                    '26-35' => '26-35',
+                    '36-45' => '36-45',
+                    '46-55' => '46-55',
+                    '55+' => '55+',
+                ]),
+                SelectFilter::make('income_level')->label('收入水平')->options([
+                    'low' => '低',
+                    'medium' => '中',
+                    'high' => '高',
+                    'ultra-high' => '超高净值',
                 ]),
             ])
             ->recordActions([EditAction::make()])

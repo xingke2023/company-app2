@@ -37,11 +37,33 @@ The backend implements two integrated systems sharing the `Customer` model:
 - `InventoryLog` — polymorphic stock movement log (reference_type/reference_id)
 
 **CRM**
-- `Customer` (shared with ERP) — has `Contact`s, `SalesOrder`s, `Opportunity`s, `Activity`s
+- `Customer` (shared with ERP) — has `Contact`s, `SalesOrder`s, `Opportunity`s, `Activity`s; also carries **客户画像** fields (gender/age_group/birthday/city/industry/income_level + `hobbies`/`tags` JSON arrays)
 - `Lead` → `Opportunity` (lead_id FK) → can be converted to a Customer
 - `Activity` — polymorphic tracking (customer_id / lead_id / opportunity_id, all nullable)
 
 Key integration: `SalesOrder.customer_id` → `Customer`; `Opportunity` can link to both `Customer` and `Lead`.
+
+**Order FKs are nullable** — `purchase_orders.supplier_id`, `sales_orders.customer_id`, `activities.user_id` were made nullable (later migrations) so the public AI assistant can record orders/activities without a supplier/customer/logged-in user.
+
+### Service Layer (业务逻辑单一来源)
+
+**All business logic lives in `app/Services/*Service.php`** — both the REST controllers and the AI assistant call the same services, so write/validation logic is never duplicated:
+
+```
+REST: CustomerController ─┐
+                          ├─→ CustomerService ─→ DB
+AI:   AiAssistantController┘
+```
+
+One service per domain entity: `CustomerService`, `LeadService`, `OpportunityService`, `ActivityService`, `ContactService`, `ProductService`, `SupplierService`, `PurchaseOrderService`, `SalesOrderService` (+ `AiService` for LLM calls). Services are constructor-injected.
+
+Key shared behaviors that belong in services, not controllers:
+- `ProductService::adjustStock()` / `setStock()` — the **only** place that writes `InventoryLog`; pass a signed delta + type + optional `reference_type`/`reference_id`.
+- `ProductService::findOrCreate()` — auto-registers a product when missing (used by purchase/stock flows).
+- `PurchaseOrderService::create()` / `SalesOrderService::create()` — wrap the whole order+items+stock mutation in `DB::transaction`; `SalesOrderService::create()` throws `RuntimeException` on insufficient stock (caller catches and shows the message).
+- `CustomerService::update()` — merges `hobbies`/`tags` arrays in `add` mode (append, dedup) vs `set` mode (replace); `queryByProfile()` filters by 画像 features.
+
+When adding a feature that both the API and the chat assistant need, **add a method to the relevant Service** and call it from both entry points.
 
 ### Filament Admin Resources
 
@@ -71,7 +93,8 @@ Two navigation groups: **进销存** (ProductCategory, Supplier, Product, Purcha
 ```
 GET    /api/quick-actions     小程序快捷按钮配置（QuickAction + items 树）
 GET    /api/app-config        应用配置键值对（AppSetting，品牌文案等）
-POST   /api/ai/message        AI 聊天助手（进销存/CRM 自然语言操作）
+POST   /api/ai/message        AI 聊天助手（文字 + 可选 image_base64 拍照/相册）
+POST   /api/ai/voice          AI 语音输入（multipart，字段 audio → Whisper 转写）
 POST   /api/auth/register
 POST   /api/auth/login
 ```
@@ -92,6 +115,8 @@ GET    /api/purchase-orders / /{id} 只读
 CRUD   /api/customers
 CRUD   /api/leads
 CRUD   /api/opportunities
+CRUD   /api/contacts          联系人（查询参数 customer_id / search）
+CRUD   /api/activities        跟进记录（查询参数 customer_id / lead_id / opportunity_id / type / completed）
 ```
 
 `PostController` 已存在但路由**未注册**，`/api/posts` 暂不可用。
@@ -186,6 +211,18 @@ cd frontend && npm run build && pm2 restart app1-frontend
 - `backend/.env` — `APP_URL=https://app2.xingke888.com`, `FRONTEND_URL=https://app2.xingke888.com` (CORS origin), `JWT_SECRET`, `JWT_ALGO=HS256`, PostgreSQL credentials
 - `frontend/.env.local` — `NEXT_PUBLIC_API_URL=https://app2.xingke888.com/api`
 
+AI 相关（`backend/.env`，对应 `config/ai.php`）：
+- `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` — 文字意图解析（DeepSeek）
+- `AI_VISION_BASE_URL` / `AI_VISION_API_KEY` / `AI_VISION_MODEL` — 图片识别（拍照/相册，需支持 vision 的模型如 Gemini）
+- `AI_WHISPER_BASE_URL` / `AI_WHISPER_API_KEY` / `AI_WHISPER_MODEL` — 语音转写（Whisper 兼容接口）；未设 base_url 则语音功能降级提示
+
+### 小程序集成（独立项目）
+
+聊天界面不在本仓库——它是一个**多行业微信小程序**，位于 `/home/ubuntu/company-ai/miniprogram`（后端 `company-ai`，域名 `paper.xingke888.com`）。用户在「选择行业」页选 **进销存及CRM (slug=`erp_crm`)** 后，小程序聊天页的 AI 请求走本项目 `https://app2.xingke888.com/api`（行业配置的 `api_base`）。
+
+- 行业是否启用语音/拍照/相册/文件输入由 `company-ai` 后端 `industries.ai_media` 字段控制（`erp_crm` 已开启）；小程序据此渲染媒体按钮（`chat.js` 的 `mediaEnabled`）。
+- 因此本项目须提供 `/api/ai/message`(含 image_base64) 和 `/api/ai/voice`，与生鲜门店行业能力对齐。
+
 ### Database
 
 PostgreSQL，数据库 `clawdb1`，用户 `hengtai_app`，密码见 `backend/.env`。无 SQLite fallback。
@@ -241,6 +278,7 @@ cd backend && php artisan migrate:fresh --seed
 **客户** `apiResource /api/customers`
 
 查询参数：`search`(name/company/phone), `status`, `per_page`
+画像筛选参数：`gender`, `age_group`, `city`, `industry`, `income_level`(精确匹配)；`hobby`, `tag`(支持数组 `?hobby[]=高尔夫&hobby[]=红酒`，命中任一即返回，基于 `whereJsonContains`)
 详情额外加载：`contacts`(联系人列表), `salesOrders`(最近5条)
 
 | 字段 | 类型 | 必填 | 枚举值 |
@@ -255,6 +293,17 @@ cd backend && php artisan migrate:fresh --seed
 | `status` | enum | 否 | `active` / `inactive` / `potential` |
 | `assigned_to` | int | 否 | 用户 ID |
 | `notes` | string | 否 | — |
+| **客户画像字段** | | | |
+| `gender` | enum | 否 | `male` / `female` / `other` |
+| `age_group` | enum | 否 | `18-25` / `26-35` / `36-45` / `46-55` / `55+` |
+| `birthday` | date | 否 | `YYYY-MM-DD` |
+| `city` | string(100) | 否 | — |
+| `industry` | string(100) | 否 | 所在行业 |
+| `income_level` | enum | 否 | `low` / `medium` / `high` / `ultra-high` |
+| `hobbies` | array(JSON) | 否 | 如 `["高尔夫","红酒"]` |
+| `tags` | array(JSON) | 否 | 如 `["VIP","高复购"]` |
+
+`hobbies`/`tags` 在 `Customer` 模型 cast 为 array。Filament 客户表单含「客户画像」折叠分区（`TagsInput` 录入 hobbies/tags）。
 
 **线索** `apiResource /api/leads`
 
@@ -302,23 +351,32 @@ cd backend && php artisan migrate:fresh --seed
 
 ### AI 聊天助手 API
 
-**入口**：`POST /api/ai/message`（无需认证，单租户公开接口）
+两个公开入口（无需认证，单租户）：
+- `POST /api/ai/message` — 文字 + 可选图片
+- `POST /api/ai/voice` — 语音（multipart，字段 `audio`）
 
-**请求**：
+**message 请求**：
 ```json
-{ "text": "用户自然语言输入", "session_id": "可选会话标识" }
+{ "text": "用户自然语言输入", "image_base64": "可选，无 data: 前缀", "session_id": "可选" }
 ```
+`text` 与 `image_base64` 至少给一个。有图片时走 vision 模型（config `ai.vision_*`）；纯文字走文字模型（`ai.base_url` DeepSeek）。
 
-**响应**：
+**voice 请求**：multipart `audio`(mp3/wav/m4a/webm/ogg, ≤25MB) → Whisper 转写（config `ai.whisper_*`）→ 转出的文字再走意图解析。未配置 `AI_WHISPER_BASE_URL` 时友好降级（不报错）。
+
+**响应**（两入口一致）：
 ```json
 { "reply": "助手回复文字", "intent": "识别到的意图", "session_id": "原样返回" }
 ```
+voice 额外返回 `transcribed_text`。
 
 实现文件：
-- `app/Http/Controllers/Api/AiAssistantController.php` — 意图路由 + 全部业务方法
-- `app/Services/AiService.php` — LLM 调用 + 意图解析（DeepSeek，配置在 `config/ai.php`）
+- `app/Http/Controllers/Api/AiAssistantController.php` — `message()` / `voice()` 入口 + `dispatchIntent()`（两入口共用的意图派发 match）+ 各意图薄方法（调 Service）
+- `app/Services/AiService.php` — `parseIntent($text, $imageBase64=null)` LLM 意图解析 + `transcribeVoice($path)` 语音转写
+- 意图的实际增删改查在各 `*Service` 内（见 Service Layer 一节）
 
-#### 支持的 42 个意图
+**日期容错**：activity 的 `scheduled_at` 经 `AiAssistantController::safeDate()`（Carbon 容错解析）处理——"周五""明天"等非标准串解析失败时回退，绝不把坏日期写进数据库。
+
+#### 支持的 43 个意图
 
 **进销存 — 商品**
 
@@ -368,12 +426,13 @@ cd backend && php artisan migrate:fresh --seed
 
 **CRM — 客户**
 
-| 意图 | 触发示例 |
-|------|---------|
-| `customer_query` | "查客户张三"、"所有客户" |
-| `customer_add` | "新增客户张三 138… ABC公司" |
-| `customer_update` | "把张三手机改为138…"、"ABC状态改为inactive" |
-| `customer_delete` | "删除客户张三" |
+| 意图 | 触发示例 | 说明 |
+|------|---------|------|
+| `customer_query` | "查客户张三"、"所有客户" | 按姓名/公司/电话查 |
+| `customer_profile_query` | "查爱好高尔夫的客户"、"上海的高收入客户"、"哪些是VIP客户" | 按画像特征筛选（gender/age_group/city/industry/income_level/hobby/tag） |
+| `customer_add` | "新增客户张三 男 35岁 上海 喜欢高尔夫 VIP" | 可一次带入画像字段 |
+| `customer_update` | "把张三手机改为138…"、"给张三打上VIP标签"、"张三爱好加上钓鱼" | 标签/爱好默认追加(add)，说"改成/替换为"则覆盖(set) |
+| `customer_delete` | "删除客户张三" | |
 
 **CRM — 线索**
 
@@ -421,10 +480,12 @@ cd backend && php artisan migrate:fresh --seed
 
 - **自然语言容错**：不要求精确格式，"卖了苹果20斤" = sales_add，"赢单" = opportunity_update stage:won
 - **缺省值自动补全**：unit 默认"个"，status 默认 active，purchase 状态默认 received
-- **自动建档**：purchase_add / stock_update 时商品不存在会自动创建（`findOrCreateProduct` 辅助方法），并在回复中提示"新商品已自动建档"；sales_add 不会自动建档（需已有库存）
-- **库存安全**：sales_add 会校验库存，不足自动拒绝并提示当前库存
-- **事务保护**：purchase_add / sales_add 在 DB::transaction 内执行，失败全部回滚
-- **InventoryLog 自动写入**：stock_update / purchase_add / sales_add 均记录库存变动历史
+- **自动建档**：purchase_add / stock_update 时商品不存在会自动创建（`ProductService::findOrCreate()`），并在回复中提示"新商品已自动建档"；sales_add 不会自动建档（需已有库存）
+- **库存安全**：sales_add 校验库存，不足时 `SalesOrderService::create()` 抛 `RuntimeException`，控制器捕获并提示当前库存
+- **事务保护**：purchase_add / sales_add 在 `DB::transaction` 内执行，失败全部回滚
+- **InventoryLog 自动写入**：仅经 `ProductService::adjustStock()`，由 stock_update / purchase_add / sales_add 触发
+- **图片识别**：拍照/相册的图发到 `/ai/message` 的 `image_base64`，vision 模型识别后照常走意图（如拍进货单 → purchase_add）
+- **日期容错**：非标准日期（"周五""明天"）由 `safeDate()` 回退，不会写坏数据
 - **PHP 字符串注意**：提示语中若含中文引号 `"` / `"`，须用单引号字符串拼接，避免被 PHP 解析器误判为字符串闭合（曾出现 ParseError）
 
 ## Laravel Patterns in This Codebase
@@ -448,12 +509,13 @@ Then in the Resource file: set `$navigationGroup` as `string | \UnitEnum | null`
 ## Adding a New API Resource
 
 1. `php artisan make:model Example -mfc --no-interaction` in `backend/`
-2. Edit migration, add `$fillable`, define relationships; `php artisan migrate`
-3. Create Form Request in `app/Http/Requests/Api/`
-4. Add controller in `app/Http/Controllers/Api/`
-5. Register in `routes/api.php`
-6. Add TypeScript types to `frontend/lib/api/types.ts`
-7. Add service functions to `frontend/lib/api/example.ts`, export from `index.ts`
+2. Edit migration, add `$fillable` + `casts()`, define relationships; `php artisan migrate`
+3. Create `app/Services/ExampleService.php` with `list/create/update/delete/findByKeyword` (the single source of business logic)
+4. Create Form Request in `app/Http/Requests/Api/`
+5. Add controller in `app/Http/Controllers/Api/` — inject the Service, keep the controller thin
+6. Register in `routes/api.php`
+7. If the AI assistant should support it: add intent(s) to `AiService::parseIntent` prompt + `defaults()`, add arms to `AiAssistantController::dispatchIntent()` calling the **same Service**
+8. Add TypeScript types to `frontend/lib/api/types.ts`, service functions to `frontend/lib/api/example.ts`, export from `index.ts`
 
 ## Technology Versions
 

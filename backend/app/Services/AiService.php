@@ -10,7 +10,15 @@ class AiService
 {
     private PendingRequest $client;
 
+    private PendingRequest $visionClient;
+
+    private PendingRequest $whisperClient;
+
     private string $model;
+
+    private string $visionModel;
+
+    private string $whisperModel;
 
     public function __construct()
     {
@@ -18,21 +26,31 @@ class AiService
             ->withToken(config('ai.api_key'))
             ->timeout(60);
 
+        $this->visionClient = Http::baseUrl(config('ai.vision_base_url'))
+            ->withToken(config('ai.vision_api_key'))
+            ->timeout(60);
+
+        $this->whisperClient = Http::baseUrl(config('ai.whisper_base_url'))
+            ->withToken(config('ai.whisper_api_key'))
+            ->timeout(120);
+
         $this->model = config('ai.model');
+        $this->visionModel = config('ai.vision_model');
+        $this->whisperModel = config('ai.whisper_model');
     }
 
-    /** 解析用户自然语言，返回结构化意图 JSON。 */
-    public function parseIntent(string $text): array
+    /** 解析用户自然语言，返回结构化意图 JSON。支持可选的图片 Base64 输入。 */
+    public function parseIntent(string $text, ?string $imageBase64 = null): array
     {
         $systemPrompt = <<<'PROMPT'
 你是「进销存及CRM」系统的AI助手，帮用户用自然语言操作系统。
 
 识别意图后，严格只返回 JSON，不加任何解释文字。所有未提及字段填 null。
 
-可选 intent 值（共42个）：
+可选 intent 值：
   查询：product_query, purchase_query, sales_query, inventory_query,
         supplier_query, category_query,
-        customer_query, lead_query, opportunity_query,
+        customer_query, customer_profile_query, lead_query, opportunity_query,
         activity_query, contact_query, overview_query
   新增：product_add, purchase_add, sales_add,
         supplier_add, category_add,
@@ -46,6 +64,7 @@ class AiService
         supplier_delete, category_delete,
         customer_delete, lead_delete, opportunity_delete,
         activity_delete, contact_delete
+  个人助理：ai_suggestion, assistant_note
   其他：other
 
 返回格式：
@@ -58,8 +77,9 @@ class AiService
   "supplier": {"name":null,"contact_person":null,"phone":null,"email":null,"address":null,"notes":null},
   "supplier_update": {"keyword":null,"name":null,"contact_person":null,"phone":null,"email":null,"status":null,"notes":null},
   "category": {"name":null,"description":null},
-  "customer": {"name":null,"phone":null,"company":null,"email":null,"status":"active","source":null,"notes":null},
-  "customer_update": {"keyword":null,"name":null,"phone":null,"email":null,"company":null,"status":null,"source":null,"notes":null},
+  "customer": {"name":null,"phone":null,"company":null,"email":null,"status":"active","source":null,"notes":null,"gender":null,"age_group":null,"birthday":null,"city":null,"industry":null,"income_level":null,"hobbies":null,"tags":null},
+  "customer_update": {"keyword":null,"name":null,"phone":null,"email":null,"company":null,"status":null,"source":null,"notes":null,"gender":null,"age_group":null,"birthday":null,"city":null,"industry":null,"income_level":null,"hobbies":null,"hobbies_mode":"add","tags":null,"tags_mode":"add"},
+  "customer_filter": {"gender":null,"age_group":null,"city":null,"industry":null,"income_level":null,"hobby":null,"tag":null},
   "lead": {"name":null,"phone":null,"company":null,"email":null,"status":"new","source":null,"notes":null},
   "lead_update": {"keyword":null,"phone":null,"company":null,"email":null,"status":null,"notes":null},
   "opportunity": {"title":null,"amount":null,"stage":"prospect","probability":null,"customer_name":null,"lead_name":null,"expected_close_date":null,"notes":null},
@@ -72,13 +92,17 @@ class AiService
   "purchase": {"supplier_name":null,"items":[{"product_name":null,"quantity":1,"unit_price":"0"}],"notes":null},
   "purchase_update": {"keyword":null,"status":null,"notes":null},
   "sale": {"customer_name":null,"items":[{"product_name":null,"quantity":1,"unit_price":"0"}],"notes":null},
-  "sales_update": {"keyword":null,"status":null,"notes":null}
+  "sales_update": {"keyword":null,"status":null,"notes":null},
+  "assistant_note": {"type":"note","content":null}
 }
 
 意图识别要点（人性化，容错）：
 - 用户说"进货/收货/入库"→ purchase_add；说"卖了/出货/销售"→ sales_add
-- "库存改成/调整为/盘点"→ stock_update；"查库存/库存多少"→ product_query
-- "跟进/打电话/拜访/开会/发邮件"→ activity_add；"查跟进/跟进记录"→ activity_query
+- "库存改成/调整为/盘点"→ stock_update
+- "查库存/库存多少/还剩多少/有没有货"→ product_query（看当前库存量）
+- "库存变动/库存变化/出入库记录/库存流水/库存历史"→ inventory_query（看变动流水），即使商品不存在也归此类
+- "跟进/打电话/拜访/开会/发邮件/联系了"→ activity_add；"查跟进/跟进记录/联系记录"→ activity_query
+- activity_add 必须生成 title：用户没明说标题时，按"<对象><方式>"自动拟一个，如"记录给赵六的电话跟进"→title:"电话跟进", type:"call", customer_name:"赵六"；"给李四发了邮件"→title:"邮件跟进", type:"email"
 - 说"已完成/标记完成"→ activity_update + mark_completed:true
 - 说"线索转客户/转化线索"→ lead_update + status:"converted"
 - 说"赢单/成交"→ opportunity_update + stage:"won"；"丢单/失败"→ stage:"lost"
@@ -86,16 +110,43 @@ class AiService
 - quantity 必须是整数（不含引号）；金额/价格填数字字符串
 - 只填用户提到的字段，其余保持 null；unit_price 未提及填 "0"
 - reply 用友好口吻，如"好的，正在为您录入…"
+- activity 中若含非标准日期（"周五"/"明天"/"下午3点"）则 scheduled_at 填 null，不要填无效字符串
+- 用户说"给我建议"、"有什么好方法"、"怎么做"、"给点建议"、"帮我分析"→ ai_suggestion；reply 填完整建议内容（不限字数）
+- 用户说"帮我记一下"、"记录一下"、"备忘"、"记下来"、"写个便签"、"记条便签"→ assistant_note，type 填 "note"，content 填要记录的内容原文
+- 用户说"记个计划"、"加个计划"、"写个计划"、"待办"、"todo"→ assistant_note，type 填 "plan"，content 填计划内容
+- assistant_note 的 content 必须提取用户实际要记录的内容（去掉"帮我记一下"等前缀），若内容为空则 reply 询问"请告诉我要记录什么内容？"
+
+客户画像（重要）：
+- 画像字段：gender(male/female/other)、age_group(18-25/26-35/36-45/46-55/55+)、birthday(YYYY-MM-DD)、city、industry(行业)、income_level(low/medium/high/ultra-high)、hobbies(爱好数组)、tags(标签数组)
+- 新增/修改客户时若提到这些特征，填入 customer / customer_update 对应字段
+- 按特征筛选客户用 customer_profile_query + customer_filter
+- 单纯按姓名/公司/电话查客户仍用 customer_query（keyword）
 PROMPT;
 
-        $response = $this->client->post('/chat/completions', [
-            'model' => $this->model,
-            'messages' => [
-                ['role' => 'system', 'content' => $systemPrompt],
-                ['role' => 'user', 'content' => $text],
-            ],
-            'max_tokens' => 1200,
-        ]);
+        // 若有图片，使用 vision 模型构建多模态消息
+        if ($imageBase64) {
+            $userContent = [
+                ['type' => 'text', 'text' => $text ?: '请描述图片内容，并判断用户意图（进货单/销售单/商品/客户信息等）'],
+                ['type' => 'image_url', 'image_url' => ['url' => 'data:image/jpeg;base64,'.$imageBase64]],
+            ];
+            $response = $this->visionClient->post('/chat/completions', [
+                'model' => $this->visionModel,
+                'messages' => [
+                    ['role' => 'system', 'content' => $systemPrompt],
+                    ['role' => 'user', 'content' => $userContent],
+                ],
+                'max_tokens' => 1500,
+            ]);
+        } else {
+            $response = $this->client->post('/chat/completions', [
+                'model' => $this->model,
+                'messages' => [
+                    ['role' => 'system', 'content' => $systemPrompt],
+                    ['role' => 'user', 'content' => $text],
+                ],
+                'max_tokens' => 1200,
+            ]);
+        }
 
         if ($response->failed()) {
             Log::error('AI API error', ['status' => $response->status(), 'body' => $response->body()]);
@@ -113,6 +164,30 @@ PROMPT;
         return array_merge($this->defaults(), $parsed);
     }
 
+    /** 语音文件转文字（Whisper 兼容接口）。 */
+    public function transcribeVoice(string $filePath): string
+    {
+        if (empty(config('ai.whisper_base_url'))) {
+            return '';
+        }
+
+        $response = $this->whisperClient
+            ->attach('file', file_get_contents($filePath), basename($filePath))
+            ->post('/audio/transcriptions', [
+                'model' => $this->whisperModel,
+                'language' => 'zh',
+                'response_format' => 'json',
+            ]);
+
+        if ($response->failed()) {
+            Log::error('Whisper API error', ['status' => $response->status(), 'body' => $response->body()]);
+
+            return '';
+        }
+
+        return $response->json('text', '');
+    }
+
     private function defaults(): array
     {
         return [
@@ -120,7 +195,7 @@ PROMPT;
             'product' => null, 'product_update' => null,
             'supplier' => null, 'supplier_update' => null,
             'category' => null,
-            'customer' => null, 'customer_update' => null,
+            'customer' => null, 'customer_update' => null, 'customer_filter' => null,
             'lead' => null, 'lead_update' => null,
             'opportunity' => null, 'opportunity_update' => null,
             'activity' => null, 'activity_update' => null,
@@ -128,6 +203,7 @@ PROMPT;
             'stock' => null,
             'purchase' => null, 'purchase_update' => null,
             'sale' => null, 'sales_update' => null,
+            'assistant_note' => null,
         ];
     }
 

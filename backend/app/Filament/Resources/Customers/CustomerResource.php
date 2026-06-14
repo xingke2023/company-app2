@@ -24,7 +24,7 @@ class CustomerResource extends Resource
 
     protected static string|UnitEnum|null $navigationGroup = 'CRM';
 
-    protected static ?string $navigationLabel = '客户管理';
+    protected static ?string $navigationLabel = '客户管理CRM';
 
     protected static ?string $modelLabel = '客户';
 

@@ -7,7 +7,7 @@ import type { PurchaseOrder } from '@/lib/api';
 export default function PurchaseOrdersPage() {
   return (
     <BusinessList
-      title="采购订单"
+      title="采购单"
       searchPlaceholder="搜索单号…"
       fetchData={(token, search) => purchaseOrdersApi.list(token, search)}
       transform={(item) => {

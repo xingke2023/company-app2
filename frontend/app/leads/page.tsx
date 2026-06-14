@@ -7,7 +7,7 @@ import type { Lead } from '@/lib/api';
 export default function LeadsPage() {
   return (
     <BusinessList
-      title="销售线索"
+      title="线索"
       searchPlaceholder="搜索姓名或公司…"
       fetchData={(token, search) => leadsApi.list(token, search)}
       transform={(item) => {
