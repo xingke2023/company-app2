@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'sso' => [
+        'base_url' => env('SSO_BASE_URL', 'https://mo.xingke888.com/api'),
+        'jwt_secret' => env('SSO_JWT_SECRET'),
+    ],
+
 ];
